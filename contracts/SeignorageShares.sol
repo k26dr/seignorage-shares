@@ -3,36 +3,40 @@ pragma solidity ^0.4.18;
 contract SeignorageShares {
     enum Direction { Neutral, Expanding, Contracting }
     
-    struct Policy {
-        int vector;
-        uint startBlock;
-        uint bidTotal;
-        mapping(uint => Bid) bids;
+    struct Cycle {
+        Direction direction; // expand or contract
+        uint magnitude; // amount to expand/contract by 
+        uint startBlock; // start of cycle
+        uint bidTotal; // current amount of shares/coins posted for exchange
+        mapping(address => uint) bids; // amount of shares/coins posted for exchange by user
     }
 
-    struct Bid {
-        address user;
-        uint limit;
-        uint amount;
-    }
-    
-    uint public constant POLICY_INTERVAL = 1000; // in blocks
+    // supply contraction/expansion as a percentage of price change
+    uint public constant MINT_CONSTANT = 10;
+    uint public constant CYCLE_INTERVAL = 1000; // in blocks
     uint public constant AUCTION_DURATION = 900; // in blocks
-    uint public constant TARGET_PRICE = 1e6; // == $1
+    uint public constant TARGET_PRICE = 1e6; // == $1. in ppm-USD
 
-    ERC20 shares;
-    ERC20 coins;
+    MintableERC20 shares;
+    MintableERC20 coins;
 
     address oracle;
     uint price = 1e6; // in ppm-USD, 1e6 = $1
-    mapping(uint => Policy) policies;
+    mapping(uint => Cycle) cycles;
 
-    uint bidCounter = 0;
-    uint policyCounter = 0;
+    uint counter = 0;
 
-    function SeignorageShares () {
+    function SeignorageShares (address sharesContract, address coinsContract) {
+        shares = MintableERC20(sharesContract);
+        coins = MintableERC20(coinsContract);
+
+        require(shares.decimals() == 18);
+        require(coins.decimals() == 18);
+
         oracle = msg.sender;
-        policy.startBlock = block.number;
+
+        // start first cycle 
+        cycles[++counter] = Cycle(Direction.Neutral, 0, block.number, 0);
     }
 
     function updatePrice (uint _price) {
@@ -40,53 +44,70 @@ contract SeignorageShares {
         price = _price;
     }
 
-    function newPolicy () {
-        require(block.number > policy.startBlock + POLICY_INTERVAL);
+    function newCycle () {
+        Cycle oldCycle = cycles[counter];
+        require(block.number > oldCycle.startBlock + CYCLE_INTERVAL);
+
+        // determine monetary policy for cycle
         uint targetSupply = coins.totalSupply() * price / TARGET_PRICE;
         int vector = targetSupply - coins.totalSupply();
-        policies[++policyCounter] = Policy(vector, block.number, 0);
+        Direction direction;
+        uint magnitude;
+        if (vector == 0)
+            direction = Direction.Neutral;
+        else if (vector < 0) {
+            direction = Direction.Contracting;
+            magnitude = uint(-vector);
+        }
+        else {
+            direction  = Direction.Expanding;
+            magnitude = uint(vector);
+        }
+            
+        cycles[++counter] = Cycle(direction, magnitude, block.number, 0);
         
         // mint coins/shares
-        if (policy.vector < 0)
-            shares.mint(uint(-vector));
-        else
-            coins.mint(vector);
+        uint printAmount = magnitude * MINT_CONSTANT / 100;
+        if (direction == Direction.Contracting)
+            shares.mint(printAmount);
+        else if (direction == Direction.Expanding)
+            coins.mint(printAmount);
     }
 
-    function bid (uint amount, uint limit, uint[] bumpOrders) {
-        Policy policy = policies[policyCounter];
-        require(block.number < policy.startBlock + AUCTION_DURATION);
+    function bid (uint amount) {
+        Cycle cycle = cycles[counter];
+
+        require(block.number < cycle.startBlock + AUCTION_DURATION);
+        require(cycle.direction != Direction.Neutral);
 
         // transfer coins/shares to contract
-        if (policy.vector < 0)
+        // .transferFrom will throw an error if the user has not 
+        // called .approve(amount) in a separate transaction first
+        if (cycle.direction == Direction.Contracting)
             coins.transferFrom(msg.sender, address(this), amount);
-        else
+        else if (cycle.direction == Direction.Expanding)
             shares.transferFrom(msg.sender, address(this), amount);
 
-        // place bid on books
-        Bid memory bid = Bid(msg.sender, amount, limit);
-        policy.bids[++bidCounter] = bid;
+        // add bid to books
+        policy.bids[msg.sender] += amount;
         policy.bidTotal += amount;
-
-        // TODO: bump orders
-        // need a good system for this
-        // the naive system is to permit any order to be bumped
     }
 
-    function claim (uint policyId, uint bidId) {
-        Policy policy = policies[policyId];
-        Bid bid = policy.bids[bidId];
+    function claim (uint cyleId) {
+        Cycle cycle = cycles[cycleId];
+        uint bid = cycle.bids[msg.sender];
 
-        require(block.number > policy.startBlock + AUCTION_DURATION);
+        require(block.number > cycle.startBlock + AUCTION_DURATION);
         require(msg.sender == bid.user);
+        require(bid > 0);
+        require(cycle.direction != Direction.Neutral);
 
-        // contracting - user gets shares
-        if (policy.vector < 0) 
-            shares.transfer(bid.amount * bid.limit / 1e6);
-        // expanding - user gets coins
-        else 
-            coins.transfer(bid.amount * bid.limit / 1e6);
+        uint amount = bid * cycle.magnitude / cycle.bidTotal;
+        if (cycle.direction == Direction.Contracting)
+            shares.transfer(amount);
+        else if (cycle.direction == Direction.Expanding)
+            coins.transfer(amount);
 
-        delete bid;
+        delete cycle.bids[msg.sender];
     }
 }
