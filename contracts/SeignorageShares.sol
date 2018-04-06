@@ -1,5 +1,7 @@
 pragma solidity ^0.4.18;
 
+import './VariableSupplyERC20.sol';
+
 contract SeignorageShares {
     enum Direction { Neutral, Expanding, Contracting }
     
@@ -17,8 +19,8 @@ contract SeignorageShares {
     uint public constant AUCTION_DURATION = 900; // in blocks
     uint public constant TARGET_PRICE = 1e6; // == $1. in ppm-USD
 
-    MintableERC20 shares;
-    MintableERC20 coins;
+    VariableSupplyERC20 shares;
+    VariableSupplyERC20 coins;
 
     address oracle;
     uint price = 1e6; // in ppm-USD, 1e6 = $1
@@ -26,9 +28,9 @@ contract SeignorageShares {
 
     uint counter = 0;
 
-    function SeignorageShares (address sharesContract, address coinsContract) {
-        shares = MintableERC20(sharesContract);
-        coins = MintableERC20(coinsContract);
+    function SeignorageShares (address sharesContract, address coinsContract) public {
+        shares = VariableSupplyERC20(sharesContract);
+        coins = VariableSupplyERC20(coinsContract);
 
         require(shares.decimals() == 18);
         require(coins.decimals() == 18);
@@ -39,29 +41,28 @@ contract SeignorageShares {
         cycles[++counter] = Cycle(Direction.Neutral, 0, block.number, 0);
     }
 
-    function updatePrice (uint _price) {
+    function updatePrice (uint _price) public {
         require(msg.sender == oracle);
         price = _price;
     }
 
-    function newCycle () {
-        Cycle oldCycle = cycles[counter];
+    function newCycle () public {
+        Cycle storage oldCycle = cycles[counter];
         require(block.number > oldCycle.startBlock + CYCLE_INTERVAL);
 
         // determine monetary policy for cycle
-        uint targetSupply = coins.totalSupply() * price / TARGET_PRICE;
-        int vector = targetSupply - coins.totalSupply();
         Direction direction;
         uint magnitude;
-        if (vector == 0)
+        uint targetSupply = coins.totalSupply() * price / TARGET_PRICE;
+        if (targetSupply == coins.totalSupply())
             direction = Direction.Neutral;
-        else if (vector < 0) {
+        else if (targetSupply < coins.totalSupply()) {
             direction = Direction.Contracting;
-            magnitude = uint(-vector);
+            magnitude = coins.totalSupply() - targetSupply;
         }
         else {
             direction  = Direction.Expanding;
-            magnitude = uint(vector);
+            magnitude = targetSupply - coins.totalSupply();
         }
             
         cycles[++counter] = Cycle(direction, magnitude, block.number, 0);
@@ -74,8 +75,8 @@ contract SeignorageShares {
             coins.mint(printAmount);
     }
 
-    function bid (uint amount) {
-        Cycle cycle = cycles[counter];
+    function bid (uint amount) public {
+        Cycle storage cycle = cycles[counter];
 
         require(block.number < cycle.startBlock + AUCTION_DURATION);
         require(cycle.direction != Direction.Neutral);
@@ -89,24 +90,23 @@ contract SeignorageShares {
             shares.transferFrom(msg.sender, address(this), amount);
 
         // add bid to books
-        policy.bids[msg.sender] += amount;
-        policy.bidTotal += amount;
+        cycle.bids[msg.sender] += amount;
+        cycle.bidTotal += amount;
     }
 
-    function claim (uint cyleId) {
-        Cycle cycle = cycles[cycleId];
-        uint bid = cycle.bids[msg.sender];
+    function claim (uint cycleId) public {
+        Cycle storage cycle = cycles[cycleId];
+        uint userBid = cycle.bids[msg.sender];
 
         require(block.number > cycle.startBlock + AUCTION_DURATION);
-        require(msg.sender == bid.user);
-        require(bid > 0);
+        require(userBid > 0);
         require(cycle.direction != Direction.Neutral);
 
-        uint amount = bid * cycle.magnitude / cycle.bidTotal;
+        uint amount = userBid * cycle.magnitude / cycle.bidTotal;
         if (cycle.direction == Direction.Contracting)
-            shares.transfer(amount);
+            shares.transfer(msg.sender, amount);
         else if (cycle.direction == Direction.Expanding)
-            coins.transfer(amount);
+            coins.transfer(msg.sender, amount);
 
         delete cycle.bids[msg.sender];
     }
