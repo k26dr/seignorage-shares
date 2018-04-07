@@ -7,16 +7,16 @@ contract SeignorageController {
     
     struct Cycle {
         Direction direction; // expand or contract
-        uint magnitude; // when expanding -> number of coins to mint. when contracting -> number of shares to mint
+        uint toMint; // when expanding -> number of coins to mint. when contracting -> number of shares to mint
+        uint toBurn; // when expanding -> number of shares to burn. when contracting -> number of coins to burn
         uint startBlock; // start of cycle
-        uint bidTotal; // current amount of shares/coins posted for exchange
-        mapping(address => uint) bids; // amount of shares/coins posted for exchange by user
+        uint bidTotal; // current cumulative sum of user bids
+        mapping(address => uint) bids; // track individual bids by users
     }
 
     
     uint public constant MINT_CONSTANT = 10; // supply contraction/expansion as a percentage of price change
     uint public constant CYCLE_INTERVAL = 20; // in blocks
-    uint public constant AUCTION_DURATION = 900; // in blocks
     uint public constant TARGET_PRICE = 1e6; // == $1. in ppm-USD
 
     VariableSupplyERC20 public shares;
@@ -24,7 +24,7 @@ contract SeignorageController {
 
     address public oracle;
     uint public coinPrice = 1e6; // in ppm-USD, 1e6 = $1
-    uint public sharePrice = 1e6; // in ppm-coins, 1e6 = 1 coin
+    uint public sharePrice = 100e6; // in ppm-coins, 1e6 = 1 coin
     mapping(uint => Cycle) public cycles;
 
     uint public counter = 0;
@@ -39,7 +39,7 @@ contract SeignorageController {
         oracle = msg.sender;
 
         // start first cycle 
-        cycles[++counter] = Cycle(Direction.Neutral, 0, block.number, 0);
+        cycles[++counter] = Cycle(Direction.Neutral, 0, 0, block.number, 0);
     }
 
     // the updated price must be within 10% of the old price
@@ -66,36 +66,45 @@ contract SeignorageController {
         Cycle storage oldCycle = cycles[counter];
         require(block.number > oldCycle.startBlock + CYCLE_INTERVAL);
 
+        // burn previous cycle's bids
+        if(oldCycle.direction == Direction.Contracting)
+            coins.burn(oldCycle.toBurn);
+        if(oldCycle.direction == Direction.Expanding)
+            shares.burn(oldCycle.toBurn);
+
         // determine monetary policy for cycle
         Direction direction;
-        uint magnitude;
+        uint toMint;
+        uint toBurn;
         uint targetSupply = coins.totalSupply() * coinPrice / TARGET_PRICE;
         if (coinPrice == TARGET_PRICE)
             direction = Direction.Neutral;
         else if (coinPrice < TARGET_PRICE) {
             direction = Direction.Contracting;
-            magnitude = (coins.totalSupply() - targetSupply) * 1e6 / sharePrice;
+            toBurn = targetSupply - coins.totalSupply() * MINT_CONSTANT / 100;
+            toMint = toBurn * 1e6 / sharePrice;
         }
         else {
             direction  = Direction.Expanding;
-            magnitude = targetSupply - coins.totalSupply();
+            toMint = targetSupply - coins.totalSupply() * MINT_CONSTANT / 100;
+            toBurn = toMint * 1e6 / sharePrice;
         }
             
-        cycles[++counter] = Cycle(direction, magnitude, block.number, 0);
+        cycles[++counter] = Cycle(direction, toMint, toBurn, block.number, 0);
         
         // mint coins/shares
-        uint printAmount = magnitude * MINT_CONSTANT / 100;
         if (direction == Direction.Contracting)
-            shares.mint(printAmount);
+            shares.mint(address(this), toMint);
         else if (direction == Direction.Expanding)
-            coins.mint(printAmount);
+            coins.mint(address(this), toMint);
     }
 
     function bid (uint amount) public {
         Cycle storage cycle = cycles[counter];
 
-        require(block.number < cycle.startBlock + AUCTION_DURATION);
+        require(block.number < cycle.startBlock + CYCLE_INTERVAL);
         require(cycle.direction != Direction.Neutral);
+        require(amount > 1e16);
 
         // transfer coins/shares to contract
         // .transferFrom will throw an error if the user has not 
@@ -114,16 +123,20 @@ contract SeignorageController {
         Cycle storage cycle = cycles[cycleId];
         uint userBid = cycle.bids[msg.sender];
 
-        require(block.number > cycle.startBlock + AUCTION_DURATION);
+        require(block.number > cycle.startBlock + CYCLE_INTERVAL);
         require(userBid > 0);
         require(cycle.direction != Direction.Neutral);
 
-        uint amount = userBid * cycle.magnitude / cycle.bidTotal;
+        uint amount = userBid * cycle.toMint / cycle.bidTotal;
         if (cycle.direction == Direction.Contracting)
             shares.transfer(msg.sender, amount);
         else if (cycle.direction == Direction.Expanding)
             coins.transfer(msg.sender, amount);
 
         delete cycle.bids[msg.sender];
+    }
+    
+    function userBids (uint cycleId, address user) public view returns (uint) {
+        return cycles[cycleId].bids[user];
     }
 }

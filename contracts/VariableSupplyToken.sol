@@ -22,26 +22,32 @@ contract VariableSupplyToken is StandardToken, VariableSupplyERC20 {
         balances[msg.sender] = totalSupply;
     }
 
-    function mint(uint _value) public returns (bool) {
-        balances[msg.sender] = balances[msg.sender].add(_value);
-        totalSupply = totalSupply.add(_value);
+	function mint(address _to, uint256 _amount) public returns (bool) {
+		require(msg.sender == minter);
 
-        Mint(_value, totalSupply);
+		totalSupply = totalSupply.add(_amount);
+		balances[_to] = balances[_to].add(_amount);
 
-        return true;
-    }
+		Mint(_to, _amount);
+		Transfer(address(0), _to, _amount);
 
-    function burn(uint _value) public returns (bool) {
-        require(_value <= balances[msg.sender]);
+		return true;
+	}
 
-        // SafeMath.sub will throw if there is not enough balance.
-        balances[msg.sender] = balances[msg.sender].sub(_value);
-        totalSupply = totalSupply.sub(_value);
+	function burn(uint256 _value) public returns (bool) {
+		require(_value <= balances[msg.sender]);
+		// no need to require value <= totalSupply, since that would imply the
+		// sender's balance is greater than the totalSupply, which *should* be an assertion failure
 
-        Burn(_value, totalSupply);
+		address burner = msg.sender;
+		balances[burner] = balances[burner].sub(_value);
+		totalSupply = totalSupply.sub(_value);
 
-        return true;
-    }
+		Burn(burner, _value);
+		Transfer(burner, address(0), _value);
+
+		return true;
+	}
 
     // this function will only be called once after intiialization
     // the SeignorageController contract address is unknown when the token is created
