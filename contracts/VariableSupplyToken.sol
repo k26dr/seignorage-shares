@@ -8,7 +8,7 @@ contract VariableSupplyToken is StandardToken, VariableSupplyERC20 {
 
     string public name; 
     string public symbol;
-    address minter;
+    address public minter;
 
     function VariableSupplyToken(string _name, string _symbol, uint initialSupply) public {
         name = _name;
@@ -44,10 +44,10 @@ contract VariableSupplyToken is StandardToken, VariableSupplyERC20 {
     }
 
     // this function will only be called once after intiialization
-    // the SeignorageShares contract address is unknown when the token is created
+    // the SeignorageController contract address is unknown when the token is created
     // the creator of the token is responsible for switching the address of the
-    // minter to the SeignorageShares contrat address. Once that switch is made,
-    // it will be impossible to update the minter because the SS contract has no
+    // minter to the SeignorageController contract address. Once that switch is made,
+    // it will be impossible to update the minter because the SeignorageController contract has no
     // way of calling this function
     function setMinter(address newMinter) public {
         require(msg.sender == minter);

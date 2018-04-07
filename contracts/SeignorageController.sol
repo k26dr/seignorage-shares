@@ -2,33 +2,34 @@ pragma solidity ^0.4.18;
 
 import './VariableSupplyERC20.sol';
 
-contract SeignorageShares {
+contract SeignorageController {
     enum Direction { Neutral, Expanding, Contracting }
     
     struct Cycle {
         Direction direction; // expand or contract
-        uint magnitude; // amount to expand/contract by 
+        uint magnitude; // when expanding -> number of coins to mint. when contracting -> number of shares to mint
         uint startBlock; // start of cycle
         uint bidTotal; // current amount of shares/coins posted for exchange
         mapping(address => uint) bids; // amount of shares/coins posted for exchange by user
     }
 
-    // supply contraction/expansion as a percentage of price change
-    uint public constant MINT_CONSTANT = 10;
-    uint public constant CYCLE_INTERVAL = 1000; // in blocks
+    
+    uint public constant MINT_CONSTANT = 10; // supply contraction/expansion as a percentage of price change
+    uint public constant CYCLE_INTERVAL = 20; // in blocks
     uint public constant AUCTION_DURATION = 900; // in blocks
     uint public constant TARGET_PRICE = 1e6; // == $1. in ppm-USD
 
-    VariableSupplyERC20 shares;
-    VariableSupplyERC20 coins;
+    VariableSupplyERC20 public shares;
+    VariableSupplyERC20 public coins;
 
-    address oracle;
-    uint price = 1e6; // in ppm-USD, 1e6 = $1
-    mapping(uint => Cycle) cycles;
+    address public oracle;
+    uint public coinPrice = 1e6; // in ppm-USD, 1e6 = $1
+    uint public sharePrice = 1e6; // in ppm-coins, 1e6 = 1 coin
+    mapping(uint => Cycle) public cycles;
 
-    uint counter = 0;
+    uint public counter = 0;
 
-    function SeignorageShares (address sharesContract, address coinsContract) public {
+    function SeignorageController (address sharesContract, address coinsContract) public {
         shares = VariableSupplyERC20(sharesContract);
         coins = VariableSupplyERC20(coinsContract);
 
@@ -41,9 +42,24 @@ contract SeignorageShares {
         cycles[++counter] = Cycle(Direction.Neutral, 0, block.number, 0);
     }
 
-    function updatePrice (uint _price) public {
+    // the updated price must be within 10% of the old price
+    // this is to prevent accidental mispricings 
+    // a change of greater than 10% requires multiple transactions
+    function updateCoinPrice (uint _price) public {
         require(msg.sender == oracle);
-        price = _price;
+        require(_price > coinPrice * 9 / 10);
+        require(_price < coinPrice * 11 / 10);
+        coinPrice = _price;
+    }
+
+    // the updated price must be within 10% of the old price
+    // this is to prevent accidental mispricings 
+    // a change of greater than 10% requires multiple transactions
+    function updateSharePrice (uint _price) public {
+        require(msg.sender == oracle);
+        require(_price > sharePrice * 9 / 10);
+        require(_price < sharePrice * 11 / 10);
+        sharePrice = _price;
     }
 
     function newCycle () public {
@@ -53,12 +69,12 @@ contract SeignorageShares {
         // determine monetary policy for cycle
         Direction direction;
         uint magnitude;
-        uint targetSupply = coins.totalSupply() * price / TARGET_PRICE;
-        if (targetSupply == coins.totalSupply())
+        uint targetSupply = coins.totalSupply() * coinPrice / TARGET_PRICE;
+        if (coinPrice == TARGET_PRICE)
             direction = Direction.Neutral;
-        else if (targetSupply < coins.totalSupply()) {
+        else if (coinPrice < TARGET_PRICE) {
             direction = Direction.Contracting;
-            magnitude = coins.totalSupply() - targetSupply;
+            magnitude = (coins.totalSupply() - targetSupply) * 1e6 / sharePrice;
         }
         else {
             direction  = Direction.Expanding;
