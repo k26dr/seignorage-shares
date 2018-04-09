@@ -136,8 +136,9 @@ contract SeignorageController {
         return cycles[cycleId].bids[user];
     }
 
+    // price in ppm-USD
     function currentBidPrice () public view returns (uint) {
         Cycle storage cycle = cycles[counter];
-        return cycle.bidTotal / cycle.toMint;
+        return cycle.bidTotal * 1e6 / cycle.toMint;
     }
 }
