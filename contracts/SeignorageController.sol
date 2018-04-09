@@ -15,7 +15,7 @@ contract SeignorageController {
 
     
     uint public constant MINT_CONSTANT = 10; // supply contraction/expansion as a percentage of price change
-    uint public constant CYCLE_INTERVAL = 20; // in blocks
+    uint public constant CYCLE_INTERVAL = 2000; // in blocks
     uint public constant TARGET_PRICE = 1e6; // == $1. in ppm-USD
 
     VariableSupplyERC20 public shares;
