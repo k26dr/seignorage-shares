@@ -8,7 +8,6 @@ contract SeignorageController {
     struct Cycle {
         Direction direction; // expand or contract
         uint toMint; // when expanding -> number of coins to mint. when contracting -> number of shares to mint
-        uint toBurn; // when expanding -> number of shares to burn. when contracting -> number of coins to burn
         uint startBlock; // start of cycle
         uint bidTotal; // current cumulative sum of user bids
         mapping(address => uint) bids; // track individual bids by users
@@ -39,7 +38,7 @@ contract SeignorageController {
         oracle = msg.sender;
 
         // start first cycle 
-        cycles[++counter] = Cycle(Direction.Neutral, 0, 0, block.number, 0);
+        cycles[++counter] = Cycle(Direction.Neutral, 0, block.number, 0);
     }
 
     // the updated price must be within 10% of the old price
@@ -68,29 +67,26 @@ contract SeignorageController {
 
         // burn previous cycle's bids
         if(oldCycle.direction == Direction.Contracting)
-            coins.burn(oldCycle.toBurn);
+            coins.burn(oldCycle.bidTotal);
         if(oldCycle.direction == Direction.Expanding)
-            shares.burn(oldCycle.toBurn);
+            shares.burn(oldCycle.bidTotal);
 
         // determine monetary policy for cycle
         Direction direction;
         uint toMint;
-        uint toBurn;
         uint targetSupply = coins.totalSupply() * coinPrice / TARGET_PRICE;
         if (coinPrice == TARGET_PRICE)
             direction = Direction.Neutral;
         else if (coinPrice < TARGET_PRICE) {
             direction = Direction.Contracting;
-            toBurn = targetSupply - coins.totalSupply() * MINT_CONSTANT / 100;
-            toMint = toBurn * 1e6 / sharePrice;
+            toMint = (coins.totalSupply() - targetSupply) * 1e6 / sharePrice;
         }
         else {
             direction  = Direction.Expanding;
-            toMint = targetSupply - coins.totalSupply() * MINT_CONSTANT / 100;
-            toBurn = toMint * 1e6 / sharePrice;
+            toMint = (targetSupply - coins.totalSupply()) * MINT_CONSTANT / 100;
         }
             
-        cycles[++counter] = Cycle(direction, toMint, toBurn, block.number, 0);
+        cycles[++counter] = Cycle(direction, toMint, block.number, 0);
         
         // mint coins/shares
         if (direction == Direction.Contracting)
@@ -138,5 +134,10 @@ contract SeignorageController {
     
     function userBids (uint cycleId, address user) public view returns (uint) {
         return cycles[cycleId].bids[user];
+    }
+
+    function currentBidPrice () public view returns (uint) {
+        Cycle storage cycle = cycles[counter];
+        return cycle.bidTotal / cycle.toMint;
     }
 }
