@@ -23,6 +23,7 @@ contract SeignorageController {
 
     address public oracle;
     uint public coinPrice = 1e6; // in ppm-USD, 1e6 = $1
+    uint public sharePrice = 100e6; // in ppm-coins, 1e6 = 1 coin
     mapping(uint => Cycle) public cycles;
 
     uint public counter = 0;
@@ -50,6 +51,16 @@ contract SeignorageController {
         coinPrice = _price;
     }
 
+    // the updated price must be within 10% of the old price
+    // this is to prevent accidental mispricings 
+    // a change of greater than 10% requires multiple transactions
+    function updateSharePrice (uint _price) public {
+        require(msg.sender == oracle);
+        require(_price > sharePrice * 9 / 10);
+        require(_price < sharePrice * 11 / 10);
+        sharePrice = _price;
+    }
+
     function newCycle () public {
         Cycle storage oldCycle = cycles[counter];
         require(block.number > oldCycle.startBlock + CYCLE_INTERVAL);
@@ -63,15 +74,16 @@ contract SeignorageController {
         // determine monetary policy for cycle
         Direction direction;
         uint toMint;
+        uint targetSupply = coins.totalSupply() * coinPrice / TARGET_PRICE;
         if (coinPrice == TARGET_PRICE)
             direction = Direction.Neutral;
         else if (coinPrice < TARGET_PRICE) {
             direction = Direction.Contracting;
-            toMint = shares.totalSupply() / 100;
+            toMint = (coins.totalSupply() - targetSupply) * 1e6 / sharePrice;
         }
         else {
             direction  = Direction.Expanding;
-            toMint = coins.totalSupply() / 100;
+            toMint = (targetSupply - coins.totalSupply()) * MINT_CONSTANT / 100;
         }
             
         cycles[++counter] = Cycle(direction, toMint, block.number, 0);
